@@ -9,12 +9,14 @@
     body { font-family: sans-serif; text-align: center; background: #111; color: #eee; }
     canvas { margin-top: 20px; }
     h1 { margin-top: 0; }
+    button { margin-top: 10px; padding: 5px 10px; font-size: 16px; }
   </style>
 </head>
 <body>
   <h1>VCV Rack → Text Decoder</h1>
   <p>Let your phone listen to the overtones. One letter every 2 seconds.</p>
   <div id="decoded" style="font-size: 24px; margin-top: 10px;"></div>
+  <button onclick="clearMessage()">Clear</button>
 
   <script>
     let mic, fft;
@@ -49,6 +51,9 @@
       const spectrum = fft.analyze();
       let amps = harmonics.map(freq => fft.getEnergy(freq));
 
+      // Apply basic noise floor filtering
+      amps = amps.map(a => (a < 10 ? 0 : a));
+
       // Normalize to 0–5
       let maxAmp = Math.max(...amps);
       let norm = amps.map(a => maxAmp ? parseFloat((a / maxAmp * 5).toFixed(2)) : 0);
@@ -60,7 +65,7 @@
       }
 
       // Decode once every 2 seconds
-      if (millis() - lastDecodeTime > decodeInterval) {
+      if (millis() - lastDecodeTime > decodeInterval && maxAmp > 20) {
         let bestChar = '?';
         let minDiff = Infinity;
         for (let c in referenceMap) {
@@ -73,10 +78,18 @@
             bestChar = c;
           }
         }
-        message += bestChar;
-        document.getElementById('decoded').innerText = `Decoded: "${message.toUpperCase()}"`;
+
+        if (bestChar !== '?') {
+          message += bestChar;
+          document.getElementById('decoded').innerText = `Decoded: "${message.toUpperCase()}"`;
+        }
         lastDecodeTime = millis();
       }
+    }
+
+    function clearMessage() {
+      message = "";
+      document.getElementById('decoded').innerText = "Decoded: \"\"";
     }
   </script>
 </body>
