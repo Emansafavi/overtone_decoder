@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>VCV Overtone Text Decoder</title>
+  <title>VCV Overtone Letter Decoder (A–H)</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/addons/p5.sound.min.js"></script>
   <style>
@@ -13,8 +13,8 @@
   </style>
 </head>
 <body>
-  <h1>VCV Rack → Text Decoder</h1>
-  <p>Let your phone listen to the overtones. One letter every 2 seconds.</p>
+  <h1>VCV → Text Decoder (A–H)</h1>
+  <p>Each letter activates one overtone. Send from Python, decode here.</p>
   <div id="decoded" style="font-size: 24px; margin-top: 10px;"></div>
   <button onclick="clearMessage()">Clear</button>
 
@@ -22,37 +22,10 @@
     let mic, fft;
     let message = "";
     let lastDecodeTime = 0;
-    const decodeInterval = 2000; // ms
+    const decodeInterval = 2000;
 
     const harmonics = [130.81, 196.22, 261.63, 327.03, 392.44, 457.84, 523.25, 588.66];
-    const referenceMap = {
-      'a': [5, 0, 0, 0, 0, 0, 0, 0],
-      'b': [0, 5, 0, 0, 0, 0, 0, 0],
-      'c': [0, 0, 5, 0, 0, 0, 0, 0],
-      'd': [0, 0, 0, 5, 0, 0, 0, 0],
-      'e': [0, 0, 0, 0, 5, 0, 0, 0],
-      'f': [0, 0, 0, 0, 0, 5, 0, 0],
-      'g': [0, 0, 0, 0, 0, 0, 5, 0],
-      'h': [0, 0, 0, 0, 0, 0, 0, 5],
-      'i': [3, 2, 0, 0, 0, 0, 0, 0],
-      'j': [2, 3, 0, 0, 0, 0, 0, 0],
-      'k': [0, 3, 2, 0, 0, 0, 0, 0],
-      'l': [0, 2, 3, 0, 0, 0, 0, 0],
-      'm': [0, 0, 3, 2, 0, 0, 0, 0],
-      'n': [0, 0, 2, 3, 0, 0, 0, 0],
-      'o': [0, 0, 0, 3, 2, 0, 0, 0],
-      'p': [0, 0, 0, 2, 3, 0, 0, 0],
-      'q': [0, 0, 0, 0, 3, 2, 0, 0],
-      'r': [0, 0, 0, 0, 2, 3, 0, 0],
-      's': [0, 0, 0, 0, 0, 3, 2, 0],
-      't': [0, 0, 0, 0, 0, 2, 3, 0],
-      'u': [0, 0, 0, 0, 0, 0, 3, 2],
-      'v': [0, 0, 0, 0, 0, 0, 2, 3],
-      'w': [2, 0, 3, 0, 2, 0, 1, 0],
-      'x': [0, 1, 0, 2, 0, 3, 0, 2],
-      'y': [1, 1, 1, 1, 1, 1, 1, 1],
-      'z': [2, 2, 2, 2, 2, 2, 2, 2]
-    };
+    const overtoneToLetter = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
 
     function setup() {
       createCanvas(360, 200);
@@ -66,43 +39,24 @@
       background(20);
       fill(255);
       textAlign(CENTER);
-      text('Listening for overtones...', width / 2, 20);
+      text('Listening for single overtone letters (A–H)...', width / 2, 20);
 
       const spectrum = fft.analyze();
       let amps = harmonics.map(freq => fft.getEnergy(freq));
 
-      // Apply basic noise floor filtering
-      amps = amps.map(a => (a < 10 ? 0 : a));
-
-      // Normalize to 0–5
-      let maxAmp = Math.max(...amps);
-      let norm = amps.map(a => maxAmp ? parseFloat((a / maxAmp * 5).toFixed(2)) : 0);
-
       // Draw bars
-      for (let i = 0; i < norm.length; i++) {
+      for (let i = 0; i < amps.length; i++) {
         fill(100 + i * 20, 200, 255);
-        rect(i * 40 + 10, height - 10, 20, -norm[i] * 30);
+        rect(i * 40 + 10, height - 10, 20, -amps[i] * 0.6);
       }
 
-      // Decode once every 2 seconds
-      if (millis() - lastDecodeTime > decodeInterval && maxAmp > 20) {
-        let bestChar = '?';
-        let minDiff = Infinity;
-        for (let c in referenceMap) {
-          let diff = 0;
-          for (let i = 0; i < 8; i++) {
-            diff += Math.pow(referenceMap[c][i] - norm[i], 2);
-          }
-          if (diff < minDiff) {
-            minDiff = diff;
-            bestChar = c;
-          }
-        }
+      // Decode once per interval if energy is sufficient
+      if (millis() - lastDecodeTime > decodeInterval && Math.max(...amps) > 20) {
+        let maxIndex = amps.indexOf(Math.max(...amps));
+        let decodedChar = overtoneToLetter[maxIndex];
 
-        if (bestChar !== '?') {
-          message += bestChar;
-          document.getElementById('decoded').innerText = `Decoded: "${message.toUpperCase()}"`;
-        }
+        message += decodedChar;
+        document.getElementById('decoded').innerText = `Decoded: "${message.toUpperCase()}"`;
         lastDecodeTime = millis();
       }
     }
