@@ -12,25 +12,28 @@
   </style>
 </head>
 <body>
-
   <h1>VCV Rack → Text Decoder</h1>
-  <p>Let your phone listen to the 8 overtones and this will decode the text.</p>
-  <div id="decoded"></div>
+  <p>Let your phone listen to the overtones. One letter every 2 seconds.</p>
+  <div id="decoded" style="font-size: 24px; margin-top: 10px;"></div>
 
   <script>
     let mic, fft;
+    let message = "";
+    let lastDecodeTime = 0;
+    const decodeInterval = 2000; // ms
 
     const harmonics = [130.81, 196.22, 261.63, 327.03, 392.44, 457.84, 523.25, 588.66];
     const chars = 'abcdefghijklmnopqrstuvwxyz';
     const referenceMap = {};
 
-    // Build a fake mapping: 26 letters mapped to 8 amplitudes in 0–5 (example only)
+    // Reference mapping: a-z → 8 normalized values
     for (let i = 0; i < chars.length; i++) {
-      referenceMap[chars[i]] = Array(8).fill(0).map((_, j) => ((i + j) % 26) / 25 * 5);
+      const base = (i / 25) * 5;
+      referenceMap[chars[i]] = Array.from({ length: 8 }, (_, j) => parseFloat(((base + j) % 5).toFixed(2)));
     }
 
     function setup() {
-      createCanvas(320, 200);
+      createCanvas(360, 200);
       mic = new p5.AudioIn();
       mic.start();
       fft = new p5.FFT(0.9, 1024);
@@ -56,20 +59,24 @@
         rect(i * 40 + 10, height - 10, 20, -norm[i] * 30);
       }
 
-      // Match to character
-      let bestChar = '?';
-      let minDiff = Infinity;
-
-      for (let c of chars) {
-        let diff = referenceMap[c].reduce((sum, ref, i) => sum + (ref - norm[i]) ** 2, 0);
-        if (diff < minDiff) {
-          minDiff = diff;
-          bestChar = c;
+      // Decode once every 2 seconds
+      if (millis() - lastDecodeTime > decodeInterval) {
+        let bestChar = '?';
+        let minDiff = Infinity;
+        for (let c in referenceMap) {
+          let diff = 0;
+          for (let i = 0; i < 8; i++) {
+            diff += Math.pow(referenceMap[c][i] - norm[i], 2);
+          }
+          if (diff < minDiff) {
+            minDiff = diff;
+            bestChar = c;
+          }
         }
+        message += bestChar;
+        document.getElementById('decoded').innerText = `Decoded: "${message.toUpperCase()}"`;
+        lastDecodeTime = millis();
       }
-
-      // Display
-      document.getElementById('decoded').innerText = `Best match: "${bestChar.toUpperCase()}"`;
     }
   </script>
 </body>
