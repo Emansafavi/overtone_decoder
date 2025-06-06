@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>VCV Overtone Text Decoder</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/addons/p5.sound.min.js"></script>
+  <style>
+    body { font-family: sans-serif; text-align: center; background: #111; color: #eee; }
+    canvas { margin-top: 20px; }
+    h1 { margin-top: 0; }
+  </style>
+</head>
+<body>
+
+  <h1>VCV Rack → Text Decoder</h1>
+  <p>Let your phone listen to the 8 overtones and this will decode the text.</p>
+  <div id="decoded"></div>
+
+  <script>
+    let mic, fft;
+
+    const harmonics = [130.81, 196.22, 261.63, 327.03, 392.44, 457.84, 523.25, 588.66];
+    const chars = 'abcdefghijklmnopqrstuvwxyz';
+    const referenceMap = {};
+
+    // Build a fake mapping: 26 letters mapped to 8 amplitudes in 0–5 (example only)
+    for (let i = 0; i < chars.length; i++) {
+      referenceMap[chars[i]] = Array(8).fill(0).map((_, j) => ((i + j) % 26) / 25 * 5);
+    }
+
+    function setup() {
+      createCanvas(320, 200);
+      mic = new p5.AudioIn();
+      mic.start();
+      fft = new p5.FFT(0.9, 1024);
+      fft.setInput(mic);
+    }
+
+    function draw() {
+      background(20);
+      fill(255);
+      textAlign(CENTER);
+      text('Listening for overtones...', width / 2, 20);
+
+      const spectrum = fft.analyze();
+      let amps = harmonics.map(freq => fft.getEnergy(freq));
+
+      // Normalize to 0–5
+      let maxAmp = Math.max(...amps);
+      let norm = amps.map(a => maxAmp ? parseFloat((a / maxAmp * 5).toFixed(2)) : 0);
+
+      // Draw bars
+      for (let i = 0; i < norm.length; i++) {
+        fill(100 + i * 20, 200, 255);
+        rect(i * 40 + 10, height - 10, 20, -norm[i] * 30);
+      }
+
+      // Match to character
+      let bestChar = '?';
+      let minDiff = Infinity;
+
+      for (let c of chars) {
+        let diff = referenceMap[c].reduce((sum, ref, i) => sum + (ref - norm[i]) ** 2, 0);
+        if (diff < minDiff) {
+          minDiff = diff;
+          bestChar = c;
+        }
+      }
+
+      // Display
+      document.getElementById('decoded').innerText = `Best match: "${bestChar.toUpperCase()}"`;
+    }
+  </script>
+</body>
+</html>
