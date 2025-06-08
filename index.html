@@ -1,60 +1,62 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Drone‑FSK Decoder</title>
-  <style>
-    :root { color-scheme: dark; }
-    body{
-      margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:1rem;font-family:system-ui,sans-serif;background:#111;color:#eee
-    }
-    main{max-width:640px;width:100%;text-align:center}
-    button{appearance:none;border:none;border-radius:.5rem;background:#2563eb;padding:.6rem 1.2rem;font-size:1rem;font-weight:600;color:#fff;cursor:pointer;transition:background .2s}
-    button:hover{background:#1d4ed8}
-    #status{margin-top:.5rem;min-height:1.4em;color:#67e8f9;font-weight:500}
-    #log{white-space:pre-wrap;background:#181818;border-radius:.5rem;padding:1rem;min-height:6rem;margin-top:1rem;font-size:1.1rem;font-family:"IBM Plex Mono",monospace}
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Drone‑FSK Decoder</title>
+<style>
+ :root{color-scheme:dark}
+ body{margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:16px;font-family:system-ui,sans-serif;background:#111;color:#eee}
+ main{max-width:640px;width:100%;text-align:center}
+ button{all:unset;cursor:pointer;background:#2563eb;color:#fff;font-weight:600;padding:10px 20px;border-radius:8px;transition:background .2s}
+ button:hover{background:#1d4ed8}
+ #status{margin-top:8px;min-height:1.4em;color:#67e8f9;font-weight:500}
+ #log{white-space:pre-wrap;background:#181818;border-radius:8px;padding:16px;min-height:96px;margin-top:16px;font-size:1.1rem;font-family:"IBM Plex Mono",monospace}
+ #debug{font-size:.9rem;opacity:.7;margin-top:8px}
+</style>
 </head>
 <body>
-  <main>
-    <h1>Drone‑FSK Decoder</h1>
-    <p>Tap <strong>Start decoding</strong>, then hold your microphone near the VCO‑drone speaker. The decoded text appears below once a valid frame is captured.</p>
-    <button id="start">Start decoding</button>
-    <div id="status">Idle</div>
-    <h2>Message</h2>
-    <div id="log"></div>
-  </main>
-
+<main>
+  <h1>Drone‑FSK Decoder</h1>
+  <p>Tap <b>Start decoding</b>, aim the mic at the 220 Hz drone. The decoded text shows below when a valid frame arrives.</p>
+  <button id="start">Start decoding</button>
+  <div id="status">Idle</div>
+  <h2>Message</h2>
+  <div id="log"></div>
+  <div id="debug"></div>
+</main>
 <script>
-/* ───  Parameters (match the encoder)  ─────────────────────────── */
-const BAUD   = 20;                    // symbols s⁻¹
-const T_SYM  = 1000 / BAUD;           // 50 ms
-const FC_HZ  = 220;                   // carrier
-const DEV_HZ = 40;                    // deviation (±)
+/*──────────────── Parameters ────────────────*/
+const BAUD = 20;                 // symbols/s
+const SYM  = 1000 / BAUD;        // ms
+const DEVIATION = 40;            // ± Hz (same as encoder)
+const SEARCH_BAND = [150, 300];  // auto‑calibration band (Hz)
 
-/* ───  Minimal CRC‑8 helper (low‑byte of CRC‑32)  ─────────────── */
-const CRC32_TAB = (()=>{const t=new Uint32Array(256);for(let i=0;i<256;i++){let c=i;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[i]=c>>>0;}return t;})();
-const crc8 = buf=>{let c=0xFFFFFFFF;for(const b of buf)c=CRC32_TAB[(c^b)&0xFF]^(c>>>8);return (c^0xFFFFFFFF)&0xFF};
+/*──────────── CRC‑8 (low‑byte CRC‑32) ────────*/
+const CRC_TAB = (()=>{const t=new Uint32Array(256);for(let i=0;i<256;i++){let c=i;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[i]=c>>>0;}return t;})();
+const crc8=b=>{let c=0xFFFFFFFF;for(const v of b)c=CRC_TAB[(c^v)&0xFF]^(c>>>8);return (c^0xFFFFFFFF)&0xFF};
 
-/* ───  UI elems  ──────────────────────────────────────────────── */
-const btn      = document.getElementById('start');
-const statusEl = document.getElementById('status');
-const logEl    = document.getElementById('log');
-function status(t){statusEl.textContent=t;}
+/*──────────── UI ────────────*/
+const $ = id=>document.getElementById(id);
+const btn=$('start'), statusEl=$('status'), logEl=$('log'), dbg=$('debug');
+const status=t=>statusEl.textContent=t;
 
-/* ───  Globals  ───────────────────────────────────────────────── */
-let audioCtx, analyser;
-const fBins = new Float32Array(1024); // will be resized later
+/*──────────── Globals ────────────*/
+let ctx, hiAnalyser, loAnalyser, timeHi, timeLo;
+let carrier=220;                // will be auto‑calibrated
+let hiHz, loHz;
+const bitBuf=[], byteBuf=[];
+let lastBit=0, phase=0;
+const OSR=4;
 
 btn.addEventListener('click', async ()=>{
-  btn.disabled = true;
+  btn.disabled=true;
   status('Requesting mic…');
   try{
-    /* Most browsers reject extreme constraints — keep it simple */
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    await setupAudio(stream);
-    status('Listening…');
+    const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+    await initAudio(stream);
+    await calibrateCarrier();
+    status(`Listening @ ${carrier.toFixed(1)} Hz…`);
     decodeLoop();
   }catch(err){
     console.error(err);
@@ -62,72 +64,98 @@ btn.addEventListener('click', async ()=>{
   }
 });
 
-async function setupAudio(stream){
-  audioCtx = new (window.AudioContext||window.webkitAudioContext)();
-  /* iOS requires explicit resume inside user gesture */
-  if(audioCtx.state==='suspended') await audioCtx.resume();
-
-  const src = audioCtx.createMediaStreamSource(stream);
-  analyser  = audioCtx.createAnalyser();
-  analyser.fftSize = 2048;                       // ≈46 ms @44.1 kHz
-  fBins.length = analyser.frequencyBinCount;
-  src.connect(analyser);
+async function initAudio(stream){
+  ctx=new (window.AudioContext||window.webkitAudioContext)();
+  if(ctx.state==='suspended') await ctx.resume();
+  const src=ctx.createMediaStreamSource(stream);
+  const hiBP=ctx.createBiquadFilter();
+  const loBP=ctx.createBiquadFilter();
+  hiBP.type=loBP.type='bandpass';
+  hiBP.Q=loBP.Q=15;            // narrow-ish ~±10 Hz
+  hiAnalyser=ctx.createAnalyser();
+  loAnalyser=ctx.createAnalyser();
+  hiAnalyser.fftSize=256;
+  loAnalyser.fftSize=256;
+  timeHi=new Float32Array(hiAnalyser.fftSize);
+  timeLo=new Float32Array(loAnalyser.fftSize);
+  src.connect(hiBP).connect(hiAnalyser);
+  src.connect(loBP).connect(loAnalyser);
+  // keep filters accessible for later retune
+  initAudio.hiBP=hiBP; initAudio.loBP=loBP;
 }
 
-/* ───  Frequency helper  ─────────────────────────────────────── */
-function magAround(hz){
-  const bin = hz / audioCtx.sampleRate * analyser.fftSize;
-  const i   = Math.round(bin);
-  let m=0,c=0;
-  for(let k=-1;k<=1;k++){
-    const idx=i+k; if(idx<0||idx>=fBins.length) continue;
-    m += fBins[idx]; c++;
+async function calibrateCarrier(){
+  status('Calibrating…');
+  const analyser=ctx.createAnalyser();
+  analyser.fftSize=4096;
+  const bins = new Float32Array(analyser.frequencyBinCount);
+  initAudio.hiBP.previousElementSibling?.connect?.(analyser); // the original source
+  // collect few frames
+  const peakCounts = new Float32Array(analyser.frequencyBinCount);
+  for(let i=0;i<8;i++){
+    await new Promise(r=>setTimeout(r,60));
+    analyser.getFloatFrequencyData(bins);
+    for(let j=0;j<bins.length;j++)
+      peakCounts[j]=Math.max(peakCounts[j],bins[j]);
   }
-  return m/c;
+  // search band
+  const minBin=Math.floor(SEARCH_BAND[0]/ctx.sampleRate*analyser.fftSize);
+  const maxBin=Math.ceil (SEARCH_BAND[1]/ctx.sampleRate*analyser.fftSize);
+  let pkBin=minBin, pkMag=-Infinity;
+  for(let b=minBin;b<=maxBin;b++) if(peakCounts[b]>pkMag){pkMag=peakCounts[b];pkBin=b;}
+  carrier = pkBin * ctx.sampleRate / analyser.fftSize;
+  hiHz = carrier + DEVIATION;
+  loHz = carrier - DEVIATION;
+  // tune band‑pass filters
+  initAudio.hiBP.frequency.value=hiHz;
+  initAudio.loBP.frequency.value=loHz;
+  dbg.textContent=`hi ${hiHz.toFixed(1)} Hz | lo ${loHz.toFixed(1)} Hz`;
 }
 
-/* ───  Bit/Byte framing  ─────────────────────────────────────── */
-const bits  = [];
-const bytes = [];
+function rms(analyser, buf){
+  analyser.getFloatTimeDomainData(buf);
+  let sum=0;
+  for(let i=0;i<buf.length;i++) sum += buf[i]*buf[i];
+  return Math.sqrt(sum/buf.length);
+}
+
+function detectBit(){
+  const rHi=rms(hiAnalyser,timeHi);
+  const rLo=rms(loAnalyser,timeLo);
+  return +(rHi>rLo);
+}
+
 function pushBit(b){
-  bits.push(b);
-  if(bits.length===8){
-    let v=0; for(let i=0;i<8;i++) v |= bits[i]<<i; // LSB‑first
-    bytes.push(v); bits.length=0; processBytes();
+  bitBuf.push(b);
+  if(bitBuf.length===8){
+    let v=0; for(let i=0;i<8;i++) v |= bitBuf[i]<<i;
+    byteBuf.push(v); bitBuf.length=0; processBytes();
   }
 }
+
 function processBytes(){
-  while(bytes.length>=8){
-    if(bytes.slice(0,6).some(v=>v!==0x55)){bytes.shift(); continue;}
-    if(bytes[6]!==0x7E){bytes.shift(); continue;}
-    /* header ok — wait for CRC */
-    if(bytes.length<8) return;
-    const payload = bytes.slice(7,-1);
-    const crcByte = bytes[bytes.length-1];
-    if(crcByte===crc8(payload)){
-      logEl.textContent = new TextDecoder('ascii').decode(Uint8Array.from(payload));
+  while(byteBuf.length>=8){
+    if(byteBuf.slice(0,6).some(x=>x!==0x55)){byteBuf.shift();continue;}
+    if(byteBuf[6]!==0x7E){byteBuf.shift();continue;}
+    if(byteBuf.length<8) return; // need CRC byte
+    const payload=byteBuf.slice(7,-1);
+    const crc=byteBuf[byteBuf.length-1];
+    if(crc===crc8(payload)){
+      logEl.textContent=new TextDecoder('ascii').decode(Uint8Array.from(payload));
       status('Decoded ✔');
     }else status('CRC mismatch');
-    bytes.length=0;
+    byteBuf.length=0;
   }
 }
 
-/* ───  Simple symbol‑sync (oversample ×4 and edge‑align)  ─────── */
-const OSR = 4;                       // oversample ×4 → 12.5 ms
-let phase = 0;
 function decodeLoop(){
-  analyser.getFloatFrequencyData(fBins);
-  const hi = magAround(FC_HZ+DEV_HZ);
-  const lo = magAround(FC_HZ-DEV_HZ);
-  const bit = +(hi>lo);
-  phase = (phase+1)%OSR;
-  /* Align on transitions: when bit changes, reset phase so we sample mid‑symbol */
-  if(phase!==OSR/2 && bit!==lastBit){ phase=OSR/2; }
+  const bit=detectBit();
+  phase=(phase+1)%OSR;
+  if(phase!==OSR/2 && bit!==lastBit) phase=OSR/2; // resync on edge
   if(phase===0) pushBit(bit);
-  lastBit = bit;
-  setTimeout(decodeLoop, T_SYM/OSR);
+  lastBit=bit;
+  setTimeout(decodeLoop,SYM/OSR);
 }
-let lastBit=0;
 </script>
 </body>
 </html>
