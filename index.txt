@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>VCV Overtone Letter Decoder (A–H)</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/addons/p5.sound.min.js"></script>
+  <style>
+    body { font-family: sans-serif; text-align: center; background: #111; color: #eee; }
+    canvas { margin-top: 20px; }
+    h1 { margin-top: 0; }
+    button { margin-top: 10px; padding: 5px 10px; font-size: 16px; }
+  </style>
+</head>
+<body>
+  <h1>VCV → Text Decoder (A–H)</h1>
+  <p>Each letter activates one overtone. Send from Python, decode here.</p>
+  <div id="decoded" style="font-size: 24px; margin-top: 10px;"></div>
+  <button onclick="clearMessage()">Clear</button>
+
+  <script>
+    let mic, fft;
+    let message = "";
+    let lastDecodeTime = 0;
+    const decodeInterval = 2000;
+
+    const harmonics = [130.81, 196.22, 261.63, 327.03, 392.44, 457.84, 523.25, 588.66];
+    const overtoneToLetter = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+
+    function setup() {
+      createCanvas(360, 200);
+      mic = new p5.AudioIn();
+      mic.start();
+      fft = new p5.FFT(0.9, 1024);
+      fft.setInput(mic);
+    }
+
+    function draw() {
+      background(20);
+      fill(255);
+      textAlign(CENTER);
+      text('Listening for single overtone letters (A–H)...', width / 2, 20);
+
+      const spectrum = fft.analyze();
+      let amps = harmonics.map(freq => fft.getEnergy(freq));
+
+      // Draw bars
+      for (let i = 0; i < amps.length; i++) {
+        fill(100 + i * 20, 200, 255);
+        rect(i * 40 + 10, height - 10, 20, -amps[i] * 0.6);
+      }
+
+      // Decode once per interval if energy is sufficient
+      if (millis() - lastDecodeTime > decodeInterval && Math.max(...amps) > 20) {
+        let maxIndex = amps.indexOf(Math.max(...amps));
+        let decodedChar = overtoneToLetter[maxIndex];
+
+        message += decodedChar;
+        document.getElementById('decoded').innerText = `Decoded: "${message.toUpperCase()}"`;
+        lastDecodeTime = millis();
+      }
+    }
+
+    function clearMessage() {
+      message = "";
+      document.getElementById('decoded').innerText = "Decoded: \"\"";
+    }
+  </script>
+</body>
+</html>
