@@ -22,7 +22,7 @@ pre{background:#f5f5f5;padding:1rem;white-space:pre-wrap}
 
 <script type="module">
 /* Parameters */
-const F1=240, F0=200, SYMBOL=50; /* ms */
+const F1=260, F0=180, SYMBOL=50; /* ms */
 const PRE = Array(6).fill(0x55).concat([0x7E]).flatMap(b=>[...Array(8)].map((_,i)=>(b>>i)&1));
 /* Small Goertzel */
 function pwr(buf,f,fs){const N=buf.length,k=Math.round(.5+N*f/fs),
