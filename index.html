@@ -1,93 +1,236 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Drone-FSK Decoder</title>
-<style>
-body{font-family:sans-serif;margin:0;padding:1rem;max-width:640px}
-button{padding:.7rem 1.4rem;font-size:1rem;border:0;border-radius:.4rem;background:#222;color:#fff}
-pre{background:#f5f5f5;padding:1rem;white-space:pre-wrap}
-#status{margin:.5rem 0;font-size:.9rem;color:#555}
-#meter{width:100%;height:6px;background:#ddd;border-radius:3px;overflow:hidden}
-#bar{height:100%;width:0;background:#4caf50}
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Drone‑FSK Decoder</title>
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+    body {
+      margin: 0;
+      font-family: system-ui, sans-serif;
+      background: #111;
+      color: #eee;
+      display: flex;
+      min-height: 100vh;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+    main {
+      max-width: 640px;
+      width: 100%;
+      text-align: center;
+    }
+    button {
+      appearance: none;
+      background: #2563eb;
+      border: none;
+      border-radius: 0.5rem;
+      padding: 0.6rem 1.2rem;
+      font-size: 1rem;
+      font-weight: 600;
+      color: #fff;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover {
+      background: #1d4ed8;
+    }
+    #status {
+      margin-top: 0.5rem;
+      min-height: 1.4em;
+      color: #67e8f9;
+      font-weight: 500;
+    }
+    #log {
+      white-space: pre-wrap;
+      background: #181818;
+      border-radius: 0.5rem;
+      padding: 1rem;
+      min-height: 6rem;
+      margin-top: 1rem;
+      font-size: 1.1rem;
+      font-family: "IBM Plex Mono", monospace;
+    }
+  </style>
 </head>
 <body>
-<h2>Drone-FSK Decoder</h2>
-<button id="start">Start listening</button>
-<div id="status"></div>
-<div id="meter"><div id="bar"></div></div>
-<pre id="log"></pre>
+  <main>
+    <h1>Drone‑FSK Decoder</h1>
 
-<script type="module">
-/* Parameters */
-const F1=260, F0=180, SYMBOL=50; /* ms */
-const PRE = Array(6).fill(0x55).concat([0x7E]).flatMap(b=>[...Array(8)].map((_,i)=>(b>>i)&1));
-/* Small Goertzel */
-function pwr(buf,f,fs){const N=buf.length,k=Math.round(.5+N*f/fs),
-w=2*Math.PI*k/N,cos=Math.cos(w),sin=Math.sin(w),coef=2*cos;
-let q0=0,q1=0,q2=0;for(const s of buf){q0=coef*q1-q2+s;q2=q1;q1=q0;}
-const re=q1-q2*cos,im=q2*sin;return re*re+im*im;}
-/* Decoder state */
-let bits=[],collect=false,payload=[];
-function bit(b){
-  console.log("bit:", b);           // ← add this line
-  bits.push(b);
- if(bits.length>=PRE.length){
-  const tail=bits.slice(-PRE.length);
-  if(!collect&&tail.every((v,i)=>v===PRE[i])){collect=true;payload=[];return;}
-  if(collect&&bits.length%8===0){
-   const byte=bits.slice(-8).reduce((a,v,i)=>a|(v<<i),0);
-   if(byte===0x7E){
-     const txt=String.fromCharCode(...payload.slice(0,-1));
-     log(txt); bits.length=0;collect=false;
-   }else payload.push(byte);
-  }
- }
-}
-/* UI helpers */
-const st=document.getElementById('status');
-const bar=document.getElementById('bar');
-function setStatus(msg){st.textContent=msg;}
-function log(t){document.getElementById('log').textContent+=t+"\n";}
-function level(rms){bar.style.width=Math.min(rms*200,100)+'%';}
-/* Main entry */
-document.getElementById('start').onclick=async()=>{
- setStatus('Requesting mic…');
- const stream=await navigator.mediaDevices.getUserMedia({audio:true});
- const ctx=new AudioContext();
- await ctx.resume();
- const src=ctx.createMediaStreamSource(stream);
-/* Choose node type */
- const useWorklet=!!ctx.audioWorklet&&('AudioWorkletNode'in window);
- let node, block=1024;
- if(useWorklet){
-   try{
-    await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([`
-      class W extends AudioWorkletProcessor{
-        process(inp){this.port.postMessage(inp[0][0]);return!0;}
-      }registerProcessor('w',W);`],{type:'application/js'})));
-    node=new AudioWorkletNode(ctx,'w');
-   }catch(e){console.warn('Worklet failed, falling back.',e);}
- }
- if(!node){node=ctx.createScriptProcessor(block,1,1);}
- src.connect(node); node.connect(ctx.destination);
- setStatus('Listening…'); document.getElementById('start').disabled=true;
- const rate=ctx.sampleRate, sampPerSym=rate*SYMBOL/1000;
- let buf=[];
- node.port?node.port.onmessage=e=>process(e.data):
- node.onaudioprocess=e=>process(e.inputBuffer.getChannelData(0));
- function process(chunk){
-  buf=[...buf,...chunk];                     /* concatenate */
-  /* simple RMS for meter */
-  let m=0; for(const s of chunk)m+=s*s; level(Math.sqrt(m/chunk.length));
-  while(buf.length>=sampPerSym){
-    const frame=buf.slice(0,sampPerSym); buf=buf.slice(sampPerSym);
-    bit(pwr(frame,F1,rate)>pwr(frame,F0,rate)?1:0);
-  }
- }
-};
-</script>
+    <p>
+      Click <strong>Start decoding</strong>, then hold your phone’s microphone near the
+      speaker that’s playing the 220 Hz drone‑FM signal. The decoded message will
+      appear below as soon as a valid frame is received.
+    </p>
+
+    <button id="start">Start decoding</button>
+    <div id="status">Idle</div>
+
+    <h2>Message</h2>
+    <div id="log"></div>
+  </main>
+
+  <script>
+    /*
+     *  ───────────────────────────────────────────────────────────────
+     *   Drone‑FSK parameters — keep in sync with the Python encoder
+     *  ───────────────────────────────────────────────────────────────
+     */
+    const BAUD = 20;                 // symbols per second
+    const SYMBOL_MS = 1000 / BAUD;   // 50 ms per symbol
+    const CENTER = 220;              // carrier (Hz)
+    const SHIFT = 40;                // ± deviation (Hz)
+
+    /*
+     *  Small helper for CRC‑8 (low byte of CRC‑32, same as the encoder).
+     *  This is NOT a generic implementation — it matches the encoder’s
+     *  behaviour:  crc = (crc32(payload) & 0xFF)
+     */
+    const CRC_TABLE = (() => {
+      const table = new Uint32Array(256);
+      for (let i = 0; i < 256; i++) {
+        let c = i;
+        for (let k = 0; k < 8; k++) {
+          c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+        }
+        table[i] = c >>> 0;
+      }
+      return table;
+    })();
+    function crc8(buf) {
+      let crc = 0xffffffff;
+      for (const b of buf) {
+        crc = CRC_TABLE[(crc ^ b) & 0xff] ^ (crc >>> 8);
+      }
+      crc = (crc ^ 0xffffffff) >>> 0;
+      return crc & 0xff;
+    }
+
+    // ─── UI wiring ──────────────────────────────────────────────────
+    const btn = document.getElementById('start');
+    const statusEl = document.getElementById('status');
+    const logEl = document.getElementById('log');
+
+    let audioCtx, analyser;
+
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      status('Requesting microphone…');
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+            channelCount: 1,
+            sampleRate: { ideal: 48000 },
+          },
+        });
+        setupAudio(stream);
+        status('Listening…');
+        decodeLoop();
+      } catch (err) {
+        console.error(err);
+        status('Microphone access denied');
+      }
+    });
+
+    function status(text) {
+      statusEl.textContent = text;
+    }
+
+    // ─── Audio analysis setup ───────────────────────────────────────
+    function setupAudio(stream) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const src = audioCtx.createMediaStreamSource(stream);
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 2048; // ≈46 ms @ 44.1 kHz, good trade‑off
+      src.connect(analyser);
+    }
+
+    // ─── Bit & frame state machines ─────────────────────────────────
+    const bitBuf = [];
+    const byteBuf = [];
+
+    function pushBit(b) {
+      bitBuf.push(b);
+      if (bitBuf.length === 8) {
+        let v = 0;
+        for (let i = 0; i < 8; i++) v |= bitBuf[i] << i; // LSB first
+        byteBuf.push(v);
+        bitBuf.length = 0;
+        processBytes();
+      }
+    }
+
+    function processBytes() {
+      // look for 0x55 0x55 0x55 0x55 0x55 0x55 0x7E … payload … CRC
+      while (byteBuf.length >= 8) {
+        // expect six 0x55
+        let ok = true;
+        for (let i = 0; i < 6; i++) if (byteBuf[i] !== 0x55) ok = false;
+        if (!ok) {
+          byteBuf.shift();
+          continue;
+        }
+        if (byteBuf[6] !== 0x7e) {
+          byteBuf.shift();
+          continue;
+        }
+        // we have at least the header, wait until we also have CRC byte
+        if (byteBuf.length < 8) return;
+
+        const payload = byteBuf.slice(7, -1);
+        const crcByte = byteBuf[byteBuf.length - 1];
+        const crcCalc = crc8(payload);
+
+        if (crcByte === crcCalc) {
+          const txt = new TextDecoder('ascii').decode(Uint8Array.from(payload));
+          logEl.textContent = txt;
+          status('Decoded!');
+        } else {
+          status('CRC error (ignoring frame)');
+        }
+        byteBuf.length = 0; // reset for next frame
+      }
+    }
+
+    // ─── Frequency‑domain bit detector ──────────────────────────────
+    /**
+     * Calculate average magnitude around a target frequency.
+     * We sample ±1 bin to make it more tolerant to tuning error.
+     */
+    function magFor(targetHz) {
+      const bin = (targetHz / audioCtx.sampleRate) * analyser.fftSize;
+      const iBin = Math.round(bin);
+      let mag = 0;
+      for (let i = -1; i <= 1; i++) {
+        const idx = iBin + i;
+        if (idx < 0) continue;
+        mag += freqBins[idx] || -120; // dBFS values ≈ −100 … 0
+      }
+      return mag / 3;
+    }
+
+    const freqBins = new Float32Array( analyser.frequencyBinCount );
+
+    function detectBit() {
+      analyser.getFloatFrequencyData(freqBins);
+      const magLo = magFor(CENTER - SHIFT);
+      const magHi = magFor(CENTER + SHIFT);
+      return magHi > magLo ? 1 : 0;
+    }
+
+    // ─── Main decode loop (polls every symbol) ─────────────────────
+    function decodeLoop() {
+      const bit = detectBit();
+      pushBit(bit);
+      setTimeout(decodeLoop, SYMBOL_MS);
+    }
+  </script>
 </body>
 </html>
