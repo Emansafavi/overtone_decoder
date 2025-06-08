@@ -6,95 +6,86 @@
 <title>Drone-FSK Decoder</title>
 <style>
 body{font-family:sans-serif;margin:0;padding:1rem;max-width:640px}
-button{padding:.7rem 1.4rem;font-size:1rem;border:none;border-radius:.4rem;background:#222;color:#fff}
-pre{background:#f5f5f5;padding:1rem;white-space:pre-wrap;word-wrap:break-word}
+button{padding:.7rem 1.4rem;font-size:1rem;border:0;border-radius:.4rem;background:#222;color:#fff}
+pre{background:#f5f5f5;padding:1rem;white-space:pre-wrap}
 #status{margin:.5rem 0;font-size:.9rem;color:#555}
+#meter{width:100%;height:6px;background:#ddd;border-radius:3px;overflow:hidden}
+#bar{height:100%;width:0;background:#4caf50}
 </style>
 </head>
 <body>
 <h2>Drone-FSK Decoder</h2>
-<button id="startBtn">Start listening</button>
+<button id="start">Start listening</button>
 <div id="status"></div>
+<div id="meter"><div id="bar"></div></div>
 <pre id="log"></pre>
 
-<script>
-/*–––––  Parameters –––––*/
-const MARK = 240, SPACE = 200;      // Hz
-const SYMBOL_MS = 50;               // baud = 20
-/*–––––  Simple Goertzel impl –––––*/
-function goertzelPower(samples, targetFreq, sampleRate){
-    const N = samples.length;
-    const k = Math.round(0.5 + ((N * targetFreq) / sampleRate));
-    const w = (2 * Math.PI / N) * k;
-    const cos = Math.cos(w), sin = Math.sin(w);
-    const coeff = 2 * cos;
-    let q0=0, q1=0, q2=0;
-    for(let i=0;i<N;i++){
-        q0 = coeff * q1 - q2 + samples[i];
-        q2 = q1; q1 = q0;
-    }
-    const real = (q1 - q2 * cos);
-    const imag = (q2 * sin);
-    return real*real + imag*imag;
+<script type="module">
+/* Parameters */
+const F1=240, F0=200, SYMBOL=50; /* ms */
+const PRE = Array(6).fill(0x55).concat([0x7E]).flatMap(b=>[...Array(8)].map((_,i)=>(b>>i)&1));
+/* Small Goertzel */
+function pwr(buf,f,fs){const N=buf.length,k=Math.round(.5+N*f/fs),
+w=2*Math.PI*k/N,cos=Math.cos(w),sin=Math.sin(w),coef=2*cos;
+let q0=0,q1=0,q2=0;for(const s of buf){q0=coef*q1-q2+s;q2=q1;q1=q0;}
+const re=q1-q2*cos,im=q2*sin;return re*re+im*im;}
+/* Decoder state */
+let bits=[],collect=false,payload=[];
+function bit(b){
+ bits.push(b);
+ if(bits.length>=PRE.length){
+  const tail=bits.slice(-PRE.length);
+  if(!collect&&tail.every((v,i)=>v===PRE[i])){collect=true;payload=[];return;}
+  if(collect&&bits.length%8===0){
+   const byte=bits.slice(-8).reduce((a,v,i)=>a|(v<<i),0);
+   if(byte===0x7E){
+     const txt=String.fromCharCode(...payload.slice(0,-1));
+     log(txt); bits.length=0;collect=false;
+   }else payload.push(byte);
+  }
+ }
 }
-/*–––––  Decoder state –––––*/
-let bits = [], collecting=false, payload=[];
-const PREAMBLE = Array(6).fill(0x55).concat([0x7E])
-      .flatMap(b => [...Array(8)].map((_,i)=>(b>>i)&1));
-function pushBit(b){
-    bits.push(b);
-    // Look for preamble at tail
-    if(bits.length >= PREAMBLE.length){
-        const tail = bits.slice(-PREAMBLE.length);
-        if(!collecting && tail.every((v,i)=>v===PREAMBLE[i])){
-            collecting=true; payload=[];
-            return;
-        }
-        if(collecting && bits.length % 8 === 0){
-            const byteBits = bits.slice(-8);
-            const byte = byteBits.reduce((a,v,i)=>a| (v<<i),0);
-            if(byte === 0x7E){          // end flag (lazy)
-                outputPayload();
-                bits.length = 0; collecting=false;
-            }else payload.push(byte);
-        }
-    }
-}
-function outputPayload(){
-    if(payload.length<1) return;
-    // drop CRC
-    const text = String.fromCharCode(...payload.slice(0,-1));
-    document.getElementById('log').textContent += text + "\n";
-}
-/*–––––  Audio setup –––––*/
-document.getElementById('startBtn').onclick = async ()=>{
-    const status = document.getElementById('status');
-    status.textContent = "Requesting mic permission…";
-    const stream = await navigator.mediaDevices.getUserMedia({audio:true});
-    const ctx = new AudioContext();
+/* UI helpers */
+const st=document.getElementById('status');
+const bar=document.getElementById('bar');
+function setStatus(msg){st.textContent=msg;}
+function log(t){document.getElementById('log').textContent+=t+"\n";}
+function level(rms){bar.style.width=Math.min(rms*200,100)+'%';}
+/* Main entry */
+document.getElementById('start').onclick=async()=>{
+ setStatus('Requesting mic…');
+ const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+ const ctx=new AudioContext();
+ await ctx.resume();
+ const src=ctx.createMediaStreamSource(stream);
+/* Choose node type */
+ const useWorklet=!!ctx.audioWorklet&&('AudioWorkletNode'in window);
+ let node, block=1024;
+ if(useWorklet){
+   try{
     await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([`
-        class BufWorklet extends AudioWorkletProcessor {
-            constructor(){super();this.buf=[];this.rate=sampleRate;}
-            process(inputs){ this.port.postMessage(inputs[0][0]); return true;}
-        }
-        registerProcessor('buf-worklet', BufWorklet);
-    `],{type:'application/javascript'})));
-    const worklet = new AudioWorkletNode(ctx, 'buf-worklet');
-    ctx.createMediaStreamSource(stream).connect(worklet);
-    const windowSamples = Math.round(ctx.sampleRate * SYMBOL_MS / 1000);
-    let sampleBuf = [];
-    worklet.port.onmessage = ({data})=>{
-        sampleBuf.push(...data);
-        while(sampleBuf.length >= windowSamples){
-            const chunk = sampleBuf.slice(0, windowSamples);
-            sampleBuf = sampleBuf.slice(windowSamples);
-            const pMark  = goertzelPower(chunk, MARK, ctx.sampleRate);
-            const pSpace = goertzelPower(chunk, SPACE, ctx.sampleRate);
-            pushBit(pMark > pSpace ? 1 : 0);
-        }
-    };
-    status.textContent = "Listening… hold phone near speaker.";
-    document.getElementById('startBtn').disabled=true;
+      class W extends AudioWorkletProcessor{
+        process(inp){this.port.postMessage(inp[0][0]);return!0;}
+      }registerProcessor('w',W);`],{type:'application/js'})));
+    node=new AudioWorkletNode(ctx,'w');
+   }catch(e){console.warn('Worklet failed, falling back.',e);}
+ }
+ if(!node){node=ctx.createScriptProcessor(block,1,1);}
+ src.connect(node); node.connect(ctx.destination);
+ setStatus('Listening…'); document.getElementById('start').disabled=true;
+ const rate=ctx.sampleRate, sampPerSym=rate*SYMBOL/1000;
+ let buf=[];
+ node.port?node.port.onmessage=e=>process(e.data):
+ node.onaudioprocess=e=>process(e.inputBuffer.getChannelData(0));
+ function process(chunk){
+  buf=[...buf,...chunk];                     /* concatenate */
+  /* simple RMS for meter */
+  let m=0; for(const s of chunk)m+=s*s; level(Math.sqrt(m/chunk.length));
+  while(buf.length>=sampPerSym){
+    const frame=buf.slice(0,sampPerSym); buf=buf.slice(sampPerSym);
+    bit(pwr(frame,F1,rate)>pwr(frame,F0,rate)?1:0);
+  }
+ }
 };
 </script>
 </body>
