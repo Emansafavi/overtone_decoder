@@ -32,7 +32,8 @@ const re=q1-q2*cos,im=q2*sin;return re*re+im*im;}
 /* Decoder state */
 let bits=[],collect=false,payload=[];
 function bit(b){
- bits.push(b);
+  console.log("bit:", b);           // ← add this line
+  bits.push(b);
  if(bits.length>=PRE.length){
   const tail=bits.slice(-PRE.length);
   if(!collect&&tail.every((v,i)=>v===PRE[i])){collect=true;payload=[];return;}
