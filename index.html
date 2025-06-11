@@ -1,140 +1,70 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html>
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Drone‑FSK Decoder</title>
-<style>
- body{margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:1rem;font-family:system-ui,sans-serif;background:#111;color:#eee}
- main{max-width:640px;width:100%;text-align:center}
- button{all:unset;cursor:pointer;background:#2563eb;color:#fff;font-weight:600;padding:10px 20px;border-radius:8px;transition:background .2s}
- button:hover{background:#1d4ed8}
- #status{margin-top:8px;min-height:1.4em;color:#67e8f9;font-weight:500}
- #msg{white-space:pre-wrap;background:#181818;border-radius:8px;padding:16px;min-height:96px;margin-top:16px;font-size:1.1rem;font-family:"IBM Plex Mono",monospace}
- #dbg{font-size:.8rem;opacity:.7;margin-top:8px;text-align:left}
-</style>
+  <meta charset="UTF-8">
+  <title>VCV Overtone Letter Decoder (A–H)</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/addons/p5.sound.min.js"></script>
+  <style>
+    body { font-family: sans-serif; text-align: center; background: #111; color: #eee; }
+    canvas { margin-top: 20px; }
+    h1 { margin-top: 0; }
+    button { margin-top: 10px; padding: 5px 10px; font-size: 16px; }
+  </style>
 </head>
 <body>
-<main>
-<h1>Drone‑FSK Decoder</h1>
-<p>Tap <b>Start</b>, hold the mic near the 220 Hz drone.<br/>Decoded frames appear below.</p>
-<button id="start">Start</button>
-<div id="status">Idle</div>
-<h2>Message</h2>
-<div id="msg"></div>
-<details style="margin-top:1rem"><summary>debug</summary>
-<pre id="dbg"></pre></details>
-</main>
-<script>
-/*  === parameters (must match encoder) === */
-const BAUD  = 20;                 // symbols/s
-const SYM   = 1000/BAUD;          // ms per symbol
-const SHIFT = 40;                 // ±Hz deviation
-const SEARCH_BAND = [150,300];    // band for auto‑tune
-const OSR=4;                      // oversample×4
+  <h1>VCV → Text Decoder (A–H)</h1>
+  <p>Each letter activates one overtone. Send from Python, decode here.</p>
+  <div id="decoded" style="font-size: 24px; margin-top: 10px;"></div>
+  <button onclick="clearMessage()">Clear</button>
 
-/* === crc‑8 helper (low byte of CRC‑32) === */
-const CRC_TAB=(()=>{const t=new Uint32Array(256);for(let i=0;i<256;i++){let c=i;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[i]=c>>>0;}return t})();
-const crc8=b=>{let c=0xFFFFFFFF;for(const v of b)c=CRC_TAB[(c^v)&0xFF]^(c>>>8);return(c^0xFFFFFFFF)&0xFF};
+  <script>
+    let mic, fft;
+    let message = "";
+    let lastDecodeTime = 0;
+    const decodeInterval = 2000;
 
-/* === ui === */
-const $=id=>document.getElementById(id);
-const btn=$('start'),statusEl=$('status'),msgEl=$('msg'),dbg=$('dbg');
-const status=t=>statusEl.textContent=t;
+    const harmonics = [130.81, 196.22, 261.63, 327.03, 392.44, 457.84, 523.25, 588.66];
+    const overtoneToLetter = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
 
-/* === globals === */
-let ctx,src,analyser;            // analyser used for detection
-let carrier=220,hiHz,loHz;
-let phase=0,lastBit=0;
-const bits=[],bytes=[];
-const bins=new Float32Array(2048); // size will adjust
+    function setup() {
+      createCanvas(360, 200);
+      mic = new p5.AudioIn();
+      mic.start();
+      fft = new p5.FFT(0.9, 1024);
+      fft.setInput(mic);
+    }
 
-btn.addEventListener('click',init);
-async function init(){
-  btn.disabled=true;
-  status('Requesting mic…');
-  try{
-    const stream=await navigator.mediaDevices.getUserMedia({audio:true});
-    await setupAudio(stream);
-    await autotune();
-    status(`Listening @ ${carrier.toFixed(1)} Hz…`);
-    decodeLoop();
-  }catch(err){console.error(err);status('Mic error: '+err.name);btn.disabled=false;}
-}
+    function draw() {
+      background(20);
+      fill(255);
+      textAlign(CENTER);
+      text('Listening for single overtone letters (A–H)...', width / 2, 20);
 
-async function setupAudio(stream){
-  ctx=new (window.AudioContext||window.webkitAudioContext)();
-  if(ctx.state==='suspended') await ctx.resume();
-  src=ctx.createMediaStreamSource(stream);
-  analyser=ctx.createAnalyser();
-  analyser.fftSize=2048;          // ≈46 ms at 44k1
-  src.connect(analyser);
-}
+      const spectrum = fft.analyze();
+      let amps = harmonics.map(freq => fft.getEnergy(freq));
 
-async function autotune(){
-  status('Calibrating…');
-  const N=12;                    // frames to average
-  const acc=new Float32Array(analyser.frequencyBinCount);
-  for(let i=0;i<N;i++){
-    await new Promise(r=>setTimeout(r,60));
-    analyser.getFloatFrequencyData(bins);
-    for(let k=0;k<bins.length;k++) acc[k]=Math.max(acc[k],bins[k]);
-  }
-  const minBin=Math.floor(SEARCH_BAND[0]/ctx.sampleRate*analyser.fftSize);
-  const maxBin=Math.ceil (SEARCH_BAND[1]/ctx.sampleRate*analyser.fftSize);
-  let pkBin=minBin,pk=-Infinity;
-  for(let k=minBin;k<=maxBin;k++) if(acc[k]>pk){pk=acc[k];pkBin=k;}
-  carrier=pkBin*ctx.sampleRate/analyser.fftSize;
-  hiHz=carrier+SHIFT; loHz=carrier-SHIFT;
-  dbg.textContent=`carrier=${carrier.toFixed(2)} Hz\nhi=${hiHz.toFixed(2)} Hz\nlo=${loHz.toFixed(2)} Hz`;
-}
+      // Draw bars
+      for (let i = 0; i < amps.length; i++) {
+        fill(100 + i * 20, 200, 255);
+        rect(i * 40 + 10, height - 10, 20, -amps[i] * 0.6);
+      }
 
-function magAround(target){
-  const bin=target/ctx.sampleRate*analyser.fftSize;
-  const i=Math.round(bin);
-  let m=0,c=0;
-  for(let k=-1;k<=1;k++){
-    const idx=i+k;if(idx<0||idx>=bins.length)continue;
-    m+=bins[idx];c++;}
-  return m/c;
-}
+      // Decode once per interval if energy is sufficient
+      if (millis() - lastDecodeTime > decodeInterval && Math.max(...amps) > 20) {
+        let maxIndex = amps.indexOf(Math.max(...amps));
+        let decodedChar = overtoneToLetter[maxIndex];
 
-function detectBit(){
-  analyser.getFloatFrequencyData(bins);
-  return +(magAround(hiHz)>magAround(loHz));
-}
+        message += decodedChar;
+        document.getElementById('decoded').innerText = `Decoded: "${message.toUpperCase()}"`;
+        lastDecodeTime = millis();
+      }
+    }
 
-function pushBit(b){
-  bits.push(b);
-  if(bits.length===8){
-    let v=0;for(let i=0;i<8;i++)v|=bits[i]<<i;
-    bytes.push(v);bits.length=0;processBytes();
-  }
-}
-
-function processBytes(){
-  while(bytes.length>=8){
-    if(bytes.slice(0,6).some(x=>x!==0x55)){bytes.shift();continue;}
-    if(bytes[6]!==0x7E){bytes.shift();continue;}
-    if(bytes.length<8) return;
-    const payload=bytes.slice(7,-1);
-    const crc=bytes[bytes.length-1];
-    if(crc===crc8(payload)){
-      msgEl.textContent=new TextDecoder('ascii').decode(Uint8Array.from(payload));
-      status('Decoded ✔');
-    }else status('CRC mismatch');
-    bytes.length=0;
-  }
-}
-
-function decodeLoop(){
-  const bit=detectBit();
-  phase=(phase+1)%OSR;
-  if(phase!==OSR/2 && bit!==lastBit) phase=OSR/2;
-  if(phase===0) pushBit(bit);
-  lastBit=bit;
-  setTimeout(decodeLoop,SYM/OSR);
-}
-</script>
+    function clearMessage() {
+      message = "";
+      document.getElementById('decoded').innerText = "Decoded: \"\"";
+    }
+  </script>
 </body>
 </html>
